@@ -1,0 +1,36 @@
+{
+    "title": "SeLoger Agents Scraper",
+    "description": "Extract real estate agencies and consultants from SeLoger annuaire pages.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrl": {
+            "title": "Start URL",
+            "type": "string",
+            "description": "SeLoger annuaire URL with location and filters.",
+            "editor": "textfield",
+            "prefill": "https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1"
+        },
+        "results_wanted": {
+            "title": "Maximum results",
+            "type": "integer",
+            "description": "Maximum number of intermediary profiles to collect.",
+            "minimum": 1,
+            "default": 20,
+            "prefill": 20,
+            "editor": "number"
+        },
+        "proxyConfiguration": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Use Apify residential proxy for the most stable production runs.",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": true,
+                "apifyProxyGroups": ["RESIDENTIAL"]
+            }
+        }
+    },
+    "required": [],
+    "additionalProperties": false
+}

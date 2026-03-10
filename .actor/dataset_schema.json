@@ -1,0 +1,234 @@
+{
+    "actorSpecification": 1,
+    "fields": {
+        "intermediary_id": {
+            "title": "Intermediary ID",
+            "type": "integer",
+            "description": "SeLoger intermediary numeric identifier"
+        },
+        "seloger_id": {
+            "title": "SeLoger ID",
+            "type": "string",
+            "description": "Secondary SeLoger intermediary ID"
+        },
+        "id_rcu": {
+            "title": "RCU ID",
+            "type": "string",
+            "description": "Intermediary RCU identifier"
+        },
+        "origin": {
+            "title": "Origin",
+            "type": "string",
+            "description": "Intermediary source system"
+        },
+        "name": {
+            "title": "Name",
+            "type": "string",
+            "description": "Agency or consultant display name"
+        },
+        "intermediary_type_label": {
+            "title": "Intermediary Type",
+            "type": "string",
+            "description": "Human-readable intermediary type"
+        },
+        "profile_url": {
+            "title": "Profile URL",
+            "type": "string",
+            "description": "Absolute SeLoger intermediary profile URL"
+        },
+        "intermediary_url_path": {
+            "title": "Profile URL Path",
+            "type": "string",
+            "description": "Relative intermediary profile URL path"
+        },
+        "rating_value": {
+            "title": "Rating",
+            "type": "number",
+            "description": "Rating value from annuaire list data"
+        },
+        "rating_reviews_count": {
+            "title": "Review Count",
+            "type": "integer",
+            "description": "Number of reviews from annuaire list data"
+        },
+        "sell_count": {
+            "title": "Sell Listings",
+            "type": "integer",
+            "description": "Number of sale listings linked to the intermediary"
+        },
+        "rent_count": {
+            "title": "Rent Listings",
+            "type": "integer",
+            "description": "Number of rent listings linked to the intermediary"
+        },
+        "total_results": {
+            "title": "Total Results",
+            "type": "integer",
+            "description": "Total annuaire intermediaries matching the query"
+        },
+        "page": {
+            "title": "Page",
+            "type": "integer",
+            "description": "Annuaire API page number"
+        },
+        "page_result_count": {
+            "title": "Page Result Count",
+            "type": "integer",
+            "description": "Number of intermediary records returned on this page"
+        },
+        "rank_on_page": {
+            "title": "Rank on Page",
+            "type": "integer",
+            "description": "Result position within the source page"
+        },
+        "rank_global": {
+            "title": "Global Rank",
+            "type": "integer",
+            "description": "Global result position derived from page and index"
+        },
+        "locality_name": {
+            "title": "Locality Name",
+            "type": "string",
+            "description": "Locality name from annuaire API response"
+        },
+        "locality_postal_code": {
+            "title": "Locality Postal Code",
+            "type": "string",
+            "description": "Locality postal code from annuaire API response"
+        },
+        "locality_place_type": {
+            "title": "Locality Place Type",
+            "type": "string",
+            "description": "Locality place type from annuaire API response"
+        },
+        "locality_place_id": {
+            "title": "Locality Place ID",
+            "type": "integer",
+            "description": "Locality place ID from annuaire API response"
+        },
+        "locality_url_path": {
+            "title": "Locality URL Path",
+            "type": "string",
+            "description": "Locality URL path from annuaire API response"
+        },
+        "breadcrumb_count": {
+            "title": "Breadcrumb Count",
+            "type": "integer",
+            "description": "Number of breadcrumb items returned by the API"
+        },
+        "first_breadcrumb_label": {
+            "title": "First Breadcrumb Label",
+            "type": "string",
+            "description": "First breadcrumb label from API response"
+        },
+        "seo_blocks_count": {
+            "title": "SEO Blocks Count",
+            "type": "integer",
+            "description": "Number of SEO blocks in the API response"
+        },
+        "redirect_url": {
+            "title": "Redirect URL",
+            "type": "string",
+            "description": "Redirect URL returned by the API when present"
+        },
+        "project_type": {
+            "title": "Project Type",
+            "type": "string",
+            "description": "Project type used in annuaire query"
+        },
+        "geo_api_place_id": {
+            "title": "Geo API Place ID",
+            "type": "string",
+            "description": "Resolved geographic place ID used in the API call"
+        },
+        "geo_api_place_type": {
+            "title": "Geo API Place Type",
+            "type": "string",
+            "description": "Resolved geographic place type used in the API call"
+        },
+        "scraped_at": {
+            "title": "Scraped At",
+            "type": "string",
+            "description": "ISO timestamp when this record was extracted"
+        },
+        "project_type": {
+            "title": "Project Type",
+            "type": "string",
+            "description": "Project type used in annuaire query"
+        },
+        "intermediary_types": {
+            "title": "Intermediary Types",
+            "type": "array",
+            "description": "Intermediary type filters used in annuaire query"
+        }
+    },
+    "views": {
+        "overview": {
+            "title": "Overview",
+            "transformation": {
+                "fields": [
+                    "intermediary_id",
+                    "name",
+                    "intermediary_type_label",
+                    "locality_name",
+                    "locality_postal_code",
+                    "rating_value",
+                    "rating_reviews_count",
+                    "rent_count",
+                    "sell_count",
+                    "rank_global",
+                    "profile_url"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "intermediary_id": {
+                        "label": "ID",
+                        "format": "text"
+                    },
+                    "name": {
+                        "label": "Name",
+                        "format": "text"
+                    },
+                    "intermediary_type_label": {
+                        "label": "Type",
+                        "format": "text"
+                    },
+                    "locality_name": {
+                        "label": "Locality",
+                        "format": "text"
+                    },
+                    "locality_postal_code": {
+                        "label": "Postal Code",
+                        "format": "text"
+                    },
+                    "rating_value": {
+                        "label": "Rating",
+                        "format": "number"
+                    },
+                    "rating_reviews_count": {
+                        "label": "Reviews",
+                        "format": "number"
+                    },
+                    "rent_count": {
+                        "label": "Rent",
+                        "format": "number"
+                    },
+                    "sell_count": {
+                        "label": "Sell",
+                        "format": "number"
+                    },
+                    "rank_global": {
+                        "label": "Rank",
+                        "format": "number"
+                    },
+                    "profile_url": {
+                        "label": "Profile",
+                        "format": "link"
+                    }
+                }
+            }
+        }
+    }
+}

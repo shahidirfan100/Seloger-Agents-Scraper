@@ -1,0 +1,22 @@
+{
+  "name": "seloger-agents-scraper",
+  "version": "1.0.0",
+  "description": "SeLoger annuaire agencies and consultants scraper.",
+  "type": "module",
+  "dependencies": {
+    "apify": "^3.6.0",
+    "cheerio": "^1.2.0",
+    "crawlee": "^3.16.0",
+    "playwright": "1.58.2"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "test": "echo \"No tests defined\""
+  },
+  "author": "Shahid Irfan",
+  "license": "ISC"
+}
