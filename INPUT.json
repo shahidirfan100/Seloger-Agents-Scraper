@@ -1,7 +1,4 @@
 {
     "startUrl": "https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1",
-    "results_wanted": 20,
-    "proxyConfiguration": {
-        "useApifyProxy": false
-    }
+    "results_wanted": 20
 }

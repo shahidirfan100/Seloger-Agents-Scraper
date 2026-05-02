@@ -26,8 +26,7 @@
             "description": "Use Apify residential proxy for the most stable production runs.",
             "editor": "proxy",
             "default": {
-                "useApifyProxy": true,
-                "apifyProxyGroups": ["RESIDENTIAL"]
+                "useApifyProxy": false
             }
         }
     },
