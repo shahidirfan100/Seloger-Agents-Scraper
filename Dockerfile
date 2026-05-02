@@ -1,4 +1,4 @@
-FROM apify/actor-node-playwright-chrome:22-1.58.2
+FROM apify/actor-node-playwright-chrome:24-1.59.1
 
 COPY --chown=myuser:myuser package*.json ./
 

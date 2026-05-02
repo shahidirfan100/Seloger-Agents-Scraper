@@ -4,10 +4,17 @@
   "description": "SeLoger annuaire agencies and consultants scraper.",
   "type": "module",
   "dependencies": {
-    "apify": "^3.6.0",
+    "apify": "^3.7.0",
     "cheerio": "^1.2.0",
     "crawlee": "^3.16.0",
-    "playwright": "1.58.2"
+    "playwright": "1.59.1"
+  },
+    "devDependencies": {
+        "@apify/eslint-config": "^2.0.0",
+        "eslint": "^9.29.0",
+        "eslint-config-prettier": "^10.1.5",
+        "prettier": "^3.5.3",
+        "vitest": "^4.1.5"
   },
   "scripts": {
     "start": "node src/main.js",
@@ -15,7 +22,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "test": "echo \"No tests defined\""
+    "test": "echo \"Error: oops, the Actor has no tests yet, sad!\" && exit 1"
   },
   "author": "Shahid Irfan",
   "license": "ISC"

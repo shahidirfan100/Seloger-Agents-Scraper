@@ -25,3 +25,9 @@
 ## Output Hygiene
 - Null and empty values are removed recursively before pushing records to the dataset
 - Empty arrays and empty objects are omitted to keep output clean and API-friendly
+
+## Runtime Resilience (QA Hardening)
+- Actor now treats transient proxy/network failures (including `ERR_TUNNEL_CONNECTION_FAILED`) as recoverable and rotates strategy automatically
+- When proxy input is provided, multiple proxy sessions are attempted before fallback
+- A direct connection fallback is included as last-resort auto-healing path
+- Challenge-page detection and retry logic remain active before API extraction begins

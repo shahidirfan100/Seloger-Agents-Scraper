@@ -19,6 +19,22 @@ const INTERMEDIARY_TYPE_LABELS = {
     5: 'Property administrator',
 };
 
+const RECOVERABLE_NETWORK_ERROR_PATTERNS = [
+    'ERR_TUNNEL_CONNECTION_FAILED',
+    'ERR_PROXY_CONNECTION_FAILED',
+    'ERR_PROXY_CERTIFICATE_INVALID',
+    'ERR_CONNECTION_CLOSED',
+    'ERR_CONNECTION_RESET',
+    'ERR_CONNECTION_TIMED_OUT',
+    'ERR_TIMED_OUT',
+    'ERR_NETWORK_CHANGED',
+    'ERR_NAME_NOT_RESOLVED',
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EHOSTUNREACH',
+];
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function toPositiveInteger(value, fallback) {
@@ -71,14 +87,24 @@ function isChallengePreview(text) {
     return /Please enable JS and disable any ad blocker|captcha-delivery|var dd=\{/i.test(text);
 }
 
+function isRecoverableNetworkError(error) {
+    if (!error) return false;
+    const message = String(error?.message || error);
+    return RECOVERABLE_NETWORK_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
+}
+
 function parseProxyForPlaywright(proxyUrl) {
     if (!proxyUrl) return undefined;
-    const parsed = new URL(proxyUrl);
-    return {
-        server: `${parsed.protocol}//${parsed.host}`,
-        username: decodeURIComponent(parsed.username || ''),
-        password: decodeURIComponent(parsed.password || ''),
-    };
+    try {
+        const parsed = new URL(proxyUrl);
+        return {
+            server: `${parsed.protocol}//${parsed.host}`,
+            username: decodeURIComponent(parsed.username || ''),
+            password: decodeURIComponent(parsed.password || ''),
+        };
+    } catch {
+        return undefined;
+    }
 }
 
 function parseStartUrl(url) {
@@ -172,19 +198,35 @@ async function warmUpSession(page, targetUrl) {
         // Continue with target URL.
     }
 
+    let lastRecoverableError;
     for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+        try {
+            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+        } catch (error) {
+            if (isRecoverableNetworkError(error)) {
+                lastRecoverableError = error;
+                log.warning(`Warmup navigation network issue (attempt ${attempt}/4): ${error.message}`);
+                await sleep(1_500 * attempt);
+                continue;
+            }
+            throw error;
+        }
+
         await sleep(1_000);
         await dismissCookieBanner(page);
         await sleep(500);
 
-        if (!(await isChallengePage(page))) return true;
+        if (!(await isChallengePage(page))) return { ready: true };
 
         log.warning(`Challenge page detected during warmup (attempt ${attempt}/4).`);
         await sleep(1_500 * attempt);
     }
 
-    return false;
+    if (lastRecoverableError) {
+        return { ready: false, recoverableError: true, lastError: lastRecoverableError };
+    }
+
+    return { ready: false, blockedByChallenge: true };
 }
 
 async function readAnnuaireContext(page, fallback) {
@@ -291,15 +333,37 @@ async function buildProxyCandidates(proxyConfig) {
         try {
             const proxyConfiguration = await Actor.createProxyConfiguration(proxyConfig);
             if (proxyConfiguration && typeof proxyConfiguration.newUrl === 'function') {
-                const proxyUrl = await proxyConfiguration.newUrl();
-                const proxy = parseProxyForPlaywright(proxyUrl);
-                candidates.push({ label: proxy ? 'input-proxy' : 'input-no-proxy', proxy });
+                const candidateLimit = Actor.isAtHome() ? 4 : 1;
+                for (let i = 0; i < candidateLimit; i += 1) {
+                    const proxyUrl = await proxyConfiguration.newUrl();
+                    const proxy = parseProxyForPlaywright(proxyUrl);
+                    candidates.push({ label: proxy ? `input-proxy-${i + 1}` : 'input-no-proxy', proxy });
+                }
             } else {
                 candidates.push({ label: 'input-no-proxy', proxy: undefined });
             }
         } catch (error) {
             log.warning(`Could not initialize input proxy configuration: ${error.message}`);
             candidates.push({ label: 'input-no-proxy', proxy: undefined });
+        }
+
+        candidates.push({ label: 'direct-no-proxy-fallback', proxy: undefined });
+
+        if (Actor.isAtHome()) {
+            try {
+                const fallbackProxyConfiguration = await Actor.createProxyConfiguration({
+                    useApifyProxy: true,
+                    apifyProxyGroups: ['RESIDENTIAL'],
+                    countryCode: 'FR',
+                });
+                const fallbackProxyUrl = await fallbackProxyConfiguration.newUrl();
+                const fallbackProxy = parseProxyForPlaywright(fallbackProxyUrl);
+                if (fallbackProxy) {
+                    candidates.push({ label: 'apify-proxy-fr-fallback', proxy: fallbackProxy });
+                }
+            } catch (error) {
+                log.warning(`Could not initialize FR proxy fallback: ${error.message}`);
+            }
         }
     } else {
         candidates.push({ label: 'direct-no-proxy', proxy: undefined });
@@ -353,14 +417,24 @@ const seenIntermediaryIds = new Set();
 async function runWithCandidate(candidate) {
     log.info(`Using browser strategy: ${candidate.label}`);
 
-    const browser = await chromium.launch({
-        headless: true,
-        channel: 'chrome',
-        proxy: candidate.proxy,
-        args: ['--disable-blink-features=AutomationControlled'],
-    });
+    let browser;
+    try {
+        browser = await chromium.launch({
+            headless: true,
+            channel: 'chrome',
+            proxy: candidate.proxy,
+            args: ['--disable-blink-features=AutomationControlled'],
+        });
+    } catch (error) {
+        if (isRecoverableNetworkError(error)) {
+            log.warning(`Browser launch failed with recoverable network issue: ${error.message}`);
+            return { recoverableNetworkError: true, blockedByChallenge: false };
+        }
+        throw error;
+    }
 
     let blockedByChallenge = false;
+    let recoverableNetworkError = false;
 
     try {
         const context = await browser.newContext({
@@ -379,10 +453,11 @@ async function runWithCandidate(candidate) {
 
         const page = await context.newPage();
 
-        const warmupOk = await warmUpSession(page, parsedUrl.normalizedUrl);
-        if (!warmupOk) {
-            blockedByChallenge = true;
-            return { blockedByChallenge };
+        const warmupResult = await warmUpSession(page, parsedUrl.normalizedUrl);
+        if (!warmupResult.ready) {
+            blockedByChallenge = Boolean(warmupResult.blockedByChallenge);
+            recoverableNetworkError = Boolean(warmupResult.recoverableError);
+            return { blockedByChallenge, recoverableNetworkError };
         }
 
         const annuaireContext = await readAnnuaireContext(page, {
@@ -496,11 +571,18 @@ async function runWithCandidate(candidate) {
 
             if (intermediaries.length < countPerPage) break;
         }
+    } catch (error) {
+        if (isRecoverableNetworkError(error)) {
+            recoverableNetworkError = true;
+            log.warning(`Recoverable network issue for ${candidate.label}: ${error.message}`);
+        } else {
+            throw error;
+        }
     } finally {
-        await browser.close();
+        await browser.close().catch(() => {});
     }
 
-    return { blockedByChallenge };
+    return { blockedByChallenge, recoverableNetworkError };
 }
 
 try {
@@ -510,6 +592,7 @@ try {
     log.info(`Proxy candidates: ${candidates.map((item) => item.label).join(', ')}`);
 
     let blockedEverywhere = false;
+    let recoverableNetworkIssueEverywhere = false;
     let triedAny = false;
 
     for (const candidate of candidates) {
@@ -520,14 +603,27 @@ try {
         if (result.blockedByChallenge) {
             blockedEverywhere = true;
         }
+        if (result.recoverableNetworkError) {
+            recoverableNetworkIssueEverywhere = true;
+        }
 
         if (totalSaved >= resultsWanted) break;
-        if (totalSaved > before) break;
-        if (!result.blockedByChallenge) break;
+        if (totalSaved > before) {
+            break;
+        }
+        if (result.blockedByChallenge || result.recoverableNetworkError) {
+            log.info(`Switching browser strategy after ${candidate.label}.`);
+            continue;
+        }
+        break;
     }
 
     if (triedAny && totalSaved === 0 && blockedEverywhere) {
         throw new Error('Blocked by SeLoger anti-bot protection. Enable Apify residential proxy and retry.');
+    }
+
+    if (triedAny && totalSaved === 0 && recoverableNetworkIssueEverywhere) {
+        throw new Error('Temporary proxy/network failures across strategies. Actor auto-healed attempts exhausted; retry run.');
     }
 } catch (error) {
     runError = error;
