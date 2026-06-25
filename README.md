@@ -8,6 +8,7 @@ Extract real estate agencies, consultants, and intermediary profiles from SeLoge
 
 - **Annuaire URL based extraction** - Start from any SeLoger annuaire location URL.
 - **Pagination support** - Collect intermediary records across multiple result pages.
+- **High page-size default** - Uses `count_per_page=100` by default to reduce API calls and lower captcha exposure.
 - **Fast structured extraction** - Collect intermediary records directly from SeLoger annuaire list data.
 - **Null-free output** - Empty values are removed recursively before dataset export.
 - **Production-ready schema** - Structured records designed for BI tools and automations.
@@ -36,6 +37,7 @@ Track intermediary presence and profile-level attributes over time to monitor wh
 |---|---|---|---|---|
 | `startUrl` | String | No | Paris annuaire URL | SeLoger annuaire URL with location and filters. |
 | `results_wanted` | Integer | No | `20` | Maximum number of intermediary profiles to collect. |
+| `count_per_page` | Integer | No | `100` | Records requested per API call. User input is used as provided. Higher values reduce pagination requests and may reduce blocking risk. |
 | `proxyConfiguration` | Object | No | `{"useApifyProxy":true,"apifyProxyGroups":["RESIDENTIAL"]}` | Proxy settings for reliability in blocked environments. |
 
 ---
@@ -86,7 +88,8 @@ Each item in the dataset can contain:
 ```json
 {
     "startUrl": "https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1",
-    "results_wanted": 20
+    "results_wanted": 20,
+    "count_per_page": 100
 }
 ```
 
@@ -95,7 +98,8 @@ Each item in the dataset can contain:
 ```json
 {
     "startUrl": "https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1",
-    "results_wanted": 120
+    "results_wanted": 120,
+    "count_per_page": 100
 }
 ```
 
@@ -105,6 +109,7 @@ Each item in the dataset can contain:
 {
     "startUrl": "https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1",
     "results_wanted": 50,
+    "count_per_page": 100,
     "proxyConfiguration": {
         "useApifyProxy": true,
         "apifyProxyGroups": ["RESIDENTIAL"]
@@ -133,7 +138,7 @@ Each item in the dataset can contain:
     "rent_count": 0,
     "rank_on_page": 1,
     "rank_global": 1,
-    "page_result_count": 8,
+    "page_result_count": 100,
     "locality_name": "Paris",
     "locality_postal_code": "75000",
     "locality_place_type": "city",
@@ -159,7 +164,10 @@ Use a fully filtered annuaire URL generated on SeLoger to keep runs repeatable a
 Use `results_wanted: 20` for quick checks, then scale up once you validate data quality.
 
 ### Pagination Is Automatic
-The actor automatically calculates the number of pages from `results_wanted`, so no pagination input is required.
+The actor automatically calculates the number of pages from `results_wanted` and `count_per_page`, so no page number input is required.
+
+### Prefer Larger Page Sizes
+`count_per_page` defaults to `100` when omitted, but user-provided values are passed through as-is. Higher values reduce the number of requests and can help avoid captcha or rate-limit pages on larger runs.
 
 ### Use Residential Proxies in Production
 If you run at high frequency or collect large volumes, residential proxy routing improves consistency.

@@ -4,7 +4,7 @@
 - Auth: None — works with plain `gotScraping` and browser-like headers (no cookies required)
 - Pagination: `page` and `countPerPage` query params
 - Core filters: `geoApiPlaceId`, `geoApiPlaceType`, `intermediaryTypes[]`, `projectType`
-- Runtime pagination strategy: pages are auto-calculated from `results_wanted` using `countPerPage=8`
+- Runtime pagination strategy: pages are auto-calculated from `results_wanted` using configurable `countPerPage` with a default of `100`
 - Bootstrap: annuaire page `__NEXT_DATA__` provides `geoApiPlaceId` and `geoApiPlaceType` from `startUrl`
 
 ## Why This API Was Selected

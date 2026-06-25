@@ -20,6 +20,15 @@
             "prefill": 20,
             "editor": "number"
         },
+        "count_per_page": {
+            "title": "Results per API page",
+            "type": "integer",
+            "description": "Number of intermediary records requested per API call. User input always takes priority. Higher values reduce pagination requests and may lower captcha risk.",
+            "minimum": 1,
+            "default": 100,
+            "prefill": 100,
+            "editor": "number"
+        },
         "proxyConfiguration": {
             "title": "Proxy configuration",
             "type": "object",

@@ -5,7 +5,7 @@ import { gotScraping } from 'got-scraping';
 
 const DEFAULT_START_URL =
     'https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1';
-const DEFAULT_COUNT_PER_PAGE = 8;
+const DEFAULT_COUNT_PER_PAGE = 100;
 const API_BASE = 'https://www.seloger.com/slr_idb/api/v4/intermediaries';
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0';
@@ -203,6 +203,7 @@ const {
     startUrl,
     start_url,
     results_wanted: resultsWantedRaw = 20,
+    count_per_page: countPerPageRaw,
     proxyConfiguration: proxyConfig,
 } = input;
 
@@ -210,7 +211,7 @@ const startUrlFromInput = startUrl || start_url || DEFAULT_START_URL;
 const parsedUrl = parseStartUrl(startUrlFromInput);
 
 const resultsWanted = toPositiveInteger(resultsWantedRaw, 20);
-const countPerPage = DEFAULT_COUNT_PER_PAGE;
+const countPerPage = toPositiveInteger(countPerPageRaw, DEFAULT_COUNT_PER_PAGE);
 const targetPages = Math.max(1, Math.ceil(resultsWanted / countPerPage));
 
 const proxyConfiguration = proxyConfig ? await Actor.createProxyConfiguration(proxyConfig) : undefined;
