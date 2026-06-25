@@ -8,7 +8,7 @@ Extract real estate agencies, consultants, and intermediary profiles from SeLoge
 
 - **Annuaire URL based extraction** - Start from any SeLoger annuaire location URL.
 - **Pagination support** - Collect intermediary records across multiple result pages.
-- **API-only extraction flow** - Collect data directly from SeLoger annuaire API responses.
+- **Fast structured extraction** - Collect intermediary records directly from SeLoger annuaire list data.
 - **Null-free output** - Empty values are removed recursively before dataset export.
 - **Production-ready schema** - Structured records designed for BI tools and automations.
 
@@ -64,15 +64,15 @@ Each item in the dataset can contain:
 | `rank_on_page` | Integer | Position of intermediary within the page results. |
 | `rank_global` | Integer | Global position derived from page and index. |
 | `page_result_count` | Integer | Number of intermediaries returned on this page. |
-| `locality_name` | String | Locality name from API response metadata. |
-| `locality_postal_code` | String | Locality postal code from API metadata. |
+| `locality_name` | String | Locality name from search response metadata. |
+| `locality_postal_code` | String | Locality postal code from search metadata. |
 | `locality_place_type` | String | Locality place type (city, district, etc.). |
-| `locality_place_id` | Integer | Locality place ID used by annuaire API. |
-| `locality_url_path` | String | Locality URL path from API response. |
+| `locality_place_id` | Integer | Locality place ID used by annuaire search. |
+| `locality_url_path` | String | Locality URL path from search response. |
 | `breadcrumb_count` | Integer | Number of breadcrumb entries in response. |
 | `first_breadcrumb_label` | String | First breadcrumb label in response metadata. |
-| `seo_blocks_count` | Integer | Number of SEO blocks returned in API response. |
-| `redirect_url` | String | Redirect URL if API response includes one. |
+| `seo_blocks_count` | Integer | Number of SEO blocks returned in search response. |
+| `redirect_url` | String | Redirect URL if the search response includes one. |
 | `total_results` | Integer | Total intermediaries matching the query. |
 | `page` | Integer | Source page number in annuaire pagination. |
 | `scraped_at` | String | ISO extraction timestamp. |
@@ -194,7 +194,7 @@ Profile completeness varies by intermediary. Empty values are omitted by design 
 Yes. Replace `startUrl` with the annuaire URL of any target city or district.
 
 ### Can I collect without opening profile details?
-The actor now runs in API-only mode and does not open intermediary detail pages.
+Yes. The actor collects list-level profile data and does not open individual intermediary detail pages.
 
 ### How do I control intermediary categories?
 Use hash filters directly in `startUrl` (`intermediaryTypes` and `projectType`).
