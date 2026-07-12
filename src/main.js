@@ -1,14 +1,12 @@
 import { Actor, log } from 'apify';
 import * as cheerio from 'cheerio';
 import { Dataset } from 'crawlee';
-import { gotScraping } from 'got-scraping';
+import { Impit } from 'impit';
 
 const DEFAULT_START_URL =
     'https://www.seloger.com/annuaire/paris-75000/#intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5&projectType=1';
 const DEFAULT_COUNT_PER_PAGE = 100;
 const API_BASE = 'https://www.seloger.com/slr_idb/api/v4/intermediaries';
-
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0';
 
 const INTERMEDIARY_TYPE_LABELS = {
     1: 'Real estate agency',
@@ -170,19 +168,6 @@ function mapIntermediary(intermediary, context) {
     };
 }
 
-async function fetchWithGotScraping(url, { proxyUrl, referer, accept = 'application/json' } = {}) {
-    return gotScraping.get(url, {
-        proxyUrl,
-        headers: {
-            'User-Agent': USER_AGENT,
-            Accept: accept,
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            ...(referer ? { Referer: referer } : {}),
-        },
-        timeout: { request: 30_000 },
-    });
-}
-
 async function fetchWithRetries(fetchFn, { retries = 3, waitMs = 2000, label }) {
     let lastResult;
     for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -225,16 +210,25 @@ try {
 
     const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
 
+    const client = new Impit({
+        browser: 'chrome',
+        ignoreTlsErrors: true,
+        ...(proxyUrl && { proxyUrl }),
+    });
+
     const pageResponse = await fetchWithRetries(
         async () => {
-            const response = await fetchWithGotScraping(parsedUrl.normalizedUrl, {
-                proxyUrl,
-                accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            const response = await client.fetch(parsedUrl.normalizedUrl, {
+                headers: {
+                    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                },
+                signal: AbortSignal.timeout(30_000),
             });
+            const body = await response.text();
             return {
-                ok: response.statusCode === 200 && response.body.includes('__NEXT_DATA__'),
-                status: response.statusCode,
-                body: response.body,
+                ok: response.ok && body.includes('__NEXT_DATA__'),
+                status: response.status,
+                body,
             };
         },
         { retries: 3, waitMs: 2000, label: 'Annuaire page bootstrap' },
@@ -261,27 +255,30 @@ try {
             intermediaryTypes: annuaireContext.intermediaryTypes,
         });
 
-        log.info(`Fetching page ${pageNumber}: ${apiUrl}`);
+        log.info(`Fetching page ${pageNumber}`);
 
         const searchResult = await fetchWithRetries(
             async () => {
-                const response = await fetchWithGotScraping(apiUrl, {
-                    proxyUrl,
-                    referer: parsedUrl.normalizedUrl,
+                const response = await client.fetch(apiUrl, {
+                    headers: {
+                        Referer: parsedUrl.normalizedUrl,
+                    },
+                    signal: AbortSignal.timeout(30_000),
                 });
+                const body = await response.text();
 
                 let data;
                 try {
-                    data = JSON.parse(response.body);
+                    data = JSON.parse(body);
                 } catch {
                     data = null;
                 }
 
                 return {
-                    ok: response.statusCode === 200 && data && Array.isArray(data.intermediaries),
-                    status: response.statusCode,
+                    ok: response.ok && data && Array.isArray(data.intermediaries),
+                    status: response.status,
                     data,
-                    bodyPreview: response.body.slice(0, 400),
+                    bodyPreview: body.slice(0, 400),
                 };
             },
             { retries: 4, waitMs: 2000, label: `Intermediaries page ${pageNumber}` },
