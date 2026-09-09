@@ -1,18 +1,22 @@
 ## Selected API
 - Endpoint: `https://www.seloger.com/slr_idb/api/v4/intermediaries`
 - Method: `GET`
-- Auth: None — works with plain `gotScraping` and browser-like headers (no cookies required)
+- Auth: No account authentication; a same-origin browser session is currently required to pass DataDome
 - Pagination: `page` and `countPerPage` query params
-- Core filters: `geoApiPlaceId`, `geoApiPlaceType`, `intermediaryTypes[]`, `projectType`
+- Core filters: `geoApiPlaceId`, `geoApiPlaceType`, repeated unbracketed `intermediaryTypes` keys, and `projectType`
+- Verified request format: `intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5`
+- Compatibility fallback: bracketed `intermediaryTypes[]` is retained as a one-attempt fallback, but returned `500` during current testing
 - Runtime pagination strategy: pages are auto-calculated from `results_wanted` using configurable `countPerPage` with a default of `100`
-- Bootstrap: annuaire page `__NEXT_DATA__` provides `geoApiPlaceId` and `geoApiPlaceType` from `startUrl`
+- Location modes: callers can provide `location.geoApiPlaceId` and `location.geoApiPlaceType`; URL-only runs resolve these from annuaire `__NEXT_DATA__`
+- Filter precedence: `filters.projectType` and `filters.intermediaryTypes` override equivalent URL hash values
 
 ## Why This API Was Selected
 - Returns structured intermediary records for annuaire pages
 - Supports pagination and location/type filters
 - Includes richer fields than basic HTML cards (`intermediaryId`, `idRcu`, rating, listing counts, profile URL)
-- Stable response shape observed across requests
-- Rejected weaker candidates: HTML card parsing (fewer fields, fragile selectors), Playwright-only flow (slower, unnecessary when API responds to direct HTTP)
+- Stable response shape observed across requests; on 2026-09-09 the repeated unbracketed filter format returned valid JSON while the bracketed format returned SeLoger's `500` error page
+- Verified page sizes of `8`, `10`, `20`, `50`, `100`, and `200`; each returned the requested number of intermediary records
+- Rejected weaker candidates: listing-derived agency data (not a complete directory), the spotlight endpoint (one promoted agency only), DOM parsing (fewer fields), and unconfirmed mobile routes
 
 ## Scoring (≥50 required)
 | Factor | Points |
@@ -40,8 +44,22 @@
 - Duplicate `intermediary_id` values are skipped across paginated pages
 - Optional fields such as `description` and `logo_src` are omitted when the source returns null
 
+## Candidate Matrix
+| Candidate | Client/profile | Status and marker | Fields | Pagination | Decision |
+|---|---|---|---:|---|---|
+| `/slr_idb/api/v4/intermediaries` with repeated keys | Same-origin Chrome session | `200` JSON, `intermediaries` present | More than 15 | `page`, `countPerPage` | Selected |
+| `/slr_idb/api/v4/intermediaries` with bracketed keys | Same-origin Chrome session | `500` HTML, `Oups - Seloger` | 0 | Unusable | One-attempt compatibility fallback |
+| Direct annuaire endpoint request | Desktop, iOS Safari, Android API profiles | `403` DataDome challenge | 0 | Unknown | Rejected without browser session |
+| Annuaire `__NEXT_DATA__` | Same-origin Chrome session | `200`, eight embedded records plus location metadata | More than 15 | Initial page only | Bootstrap source |
+| Agency spotlight BFF | Direct JSON request | `200`, one agency | 29 nested fields | No verified pagination | Rejected as incomplete |
+| Property search plus classified details | Same-origin session | `200`, agency data attached to listings | Rich but listing-dependent | Listing pages | Rejected as incomplete directory |
+| URLScan historical results | Public scan search | No current alternate directory endpoint | 0 | Unknown | Rejected |
+
 ## Runtime Resilience (QA Hardening)
-- Actor now treats transient proxy/network failures (including `ERR_TUNNEL_CONNECTION_FAILED`) as recoverable and rotates strategy automatically
-- When proxy input is provided, multiple proxy sessions are attempted before fallback
-- A direct connection fallback is included as last-resort auto-healing path
-- Challenge-page detection and retry logic remain active before API extraction begins
+- Actor treats transient proxy/network failures, including `407`, `594`, and `ERR_TUNNEL_CONNECTION_FAILED`, as recoverable.
+- HTTP bootstrap tries rotating proxy sessions and then a direct connection before browser fallback.
+- Explicit API locations avoid the protected annuaire bootstrap entirely.
+- Browser fallback uses Patchright with real Chrome, persistent context, non-headless mode, and no fixed viewport; a headless Patchright fallback is used only when Chrome cannot start.
+- Challenge-page detection and bounded retries remain active before extraction begins.
+- Only `403` or a detected challenge triggers a page reload. Ordinary `5xx` responses retry without reloading, avoiding unnecessary DataDome exposure.
+- The verified repeated-key parameter format is attempted first, eliminating four deterministic `500` retries from the previous flow.

@@ -1,11 +1,9 @@
-FROM apify/actor-node-playwright-chrome:22-1.60.0
+FROM apify/actor-node-playwright-chrome:22
 
-COPY --chown=myuser package*.json Dockerfile check-playwright-version.mjs ./
-
-RUN node check-playwright-version.mjs
+COPY --chown=myuser package*.json Dockerfile ./
 
 RUN npm --quiet set progress=false \
-    && npm install --omit=dev \
+    && npm install --omit=dev --omit=optional \
     && rm -r ~/.npm
 
 COPY --chown=myuser . ./

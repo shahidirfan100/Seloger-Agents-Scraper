@@ -3,8 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Actor, log } from 'apify';
 import * as cheerio from 'cheerio';
 import { Dataset } from 'crawlee';
-import { Impit } from 'impit';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 
 const DEFAULT_COUNT_PER_PAGE = 100;
 const API_BASE = 'https://www.seloger.com/slr_idb/api/v4/intermediaries';
@@ -12,13 +11,13 @@ const DEFAULT_PROXY_CONFIGURATION = {
     useApifyProxy: true,
     apifyProxyGroups: ['RESIDENTIAL'],
 };
-const MAX_IMPIT_ATTEMPTS = 3;
-const MAX_BROWSER_SESSIONS = 2;
-const IMPIT_TIMEOUT_MS = 12_000;
+
+const MAX_BROWSER_SESSIONS = 3;
+
 const BROWSER_NAVIGATION_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_WAIT_MS = 10_000;
 const PROXY_URL_TIMEOUT_MS = 5_000;
-const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
 
 const INTERMEDIARY_TYPE_LABELS = {
     1: 'Real estate agency',
@@ -119,14 +118,89 @@ function parseStartUrl(url) {
         throw new Error('startUrl must point to a SeLoger annuaire page.');
     }
     const hashParams = new URLSearchParams(parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash);
+    const getUrlValues = (name) => [
+        ...getHashParameterValues(parsed.searchParams, name),
+        ...getHashParameterValues(hashParams, name),
+    ];
 
     return {
         normalizedUrl: parsed.href,
-        projectType: getHashParameterValues(hashParams, 'projectType')[0] || '1',
-        intermediaryTypes: normalizeIntermediaryTypes(
-            getHashParameterValues(hashParams, 'intermediaryTypes'),
-            [1, 2, 3, 5],
-        ),
+        geoApiPlaceId: getUrlValues('geoApiPlaceId')[0],
+        geoApiPlaceType: getUrlValues('geoApiPlaceType')[0],
+        projectType: getUrlValues('projectType')[0] || '1',
+        intermediaryTypes: normalizeIntermediaryTypes(getUrlValues('intermediaryTypes'), [1, 2, 3, 5]),
+    };
+}
+
+function normalizeProjectType(value, fallback) {
+    const normalizedValue = String(value ?? '').trim();
+    return ['1', '2'].includes(normalizedValue) ? normalizedValue : fallback;
+}
+
+function normalizeFilters(filters, parsedUrl) {
+    const source = isRecord(filters) ? filters : {};
+    const intermediaryTypes = normalizeIntermediaryTypes(
+        source.intermediaryTypes ?? source.intermediary_types,
+        parsedUrl.intermediaryTypes,
+    );
+
+    return {
+        projectType: normalizeProjectType(source.projectType ?? source.project_type, parsedUrl.projectType),
+        intermediaryTypes,
+    };
+}
+
+function normalizeLocation(location) {
+    if (typeof location === 'string') {
+        const value = location.trim();
+        if (!value) return {};
+
+        if (/^https?:\/\//i.test(value)) {
+            const url = toAbsoluteSelogerUrl(value);
+            const parsedUrl = new URL(url);
+            return { localityUrlPath: parsedUrl.pathname };
+        }
+
+        const slug = value.replace(/^\/?(?:annuaire\/)?/, '').replace(/\/$/, '');
+        return { localityUrlPath: `/annuaire/${slug}/` };
+    }
+
+    if (!isRecord(location)) return {};
+
+    const geoApiPlaceId = getCaseInsensitiveField(location, 'geoApiPlaceId', 'geo_api_place_id', 'placeId', 'id');
+    const geoApiPlaceType = getCaseInsensitiveField(
+        location,
+        'geoApiPlaceType',
+        'geo_api_place_type',
+        'placeType',
+        'type',
+    );
+
+    return {
+        geoApiPlaceId: geoApiPlaceId ? String(geoApiPlaceId) : undefined,
+        geoApiPlaceType: geoApiPlaceType ? String(geoApiPlaceType) : undefined,
+        localityUrlPath: getCaseInsensitiveField(location, 'urlPath', 'url_path'),
+        localityPlaceId: getCaseInsensitiveField(location, 'placeId', 'place_id'),
+        localityPlaceType: getCaseInsensitiveField(location, 'placeType', 'place_type'),
+        localityName: getCaseInsensitiveField(location, 'name', 'localityName', 'locality_name'),
+        localityPostalCode: getCaseInsensitiveField(location, 'postalCode', 'postal_code'),
+    };
+}
+
+function createExplicitAnnuaireContext(parsedUrl, location, filters) {
+    const normalizedLocation = normalizeLocation(location);
+    const geoApiPlaceId = normalizedLocation.geoApiPlaceId || parsedUrl.geoApiPlaceId;
+    const geoApiPlaceType = normalizedLocation.geoApiPlaceType || parsedUrl.geoApiPlaceType;
+
+    if (!geoApiPlaceId || !geoApiPlaceType) return undefined;
+
+    return {
+        ...normalizedLocation,
+        geoApiPlaceId,
+        geoApiPlaceType,
+        projectType: filters.projectType,
+        intermediaryTypes: filters.intermediaryTypes,
+        totalResults: undefined,
     };
 }
 
@@ -157,7 +231,7 @@ function extractAnnuaireContext(html, parsedUrl) {
     };
 }
 
-function buildApiUrl(params) {
+function buildApiUrl(params, { bracketArrayKeys = false } = {}) {
     const query = new URLSearchParams();
     query.set('geoApiPlaceId', params.geoApiPlaceId);
     query.set('geoApiPlaceType', params.geoApiPlaceType);
@@ -165,40 +239,11 @@ function buildApiUrl(params) {
     query.set('page', String(params.pageNumber));
     query.set('projectType', String(params.projectType));
     for (const type of params.intermediaryTypes) {
-        query.append('intermediaryTypes[]', String(type));
+        query.append(bracketArrayKeys ? 'intermediaryTypes[]' : 'intermediaryTypes', String(type));
     }
     return `${API_BASE}?${query.toString()}`;
 }
 
-function withoutUrlFragment(url) {
-    const parsed = new URL(url);
-    parsed.hash = '';
-    return parsed.href;
-}
-
-function getBrowserLikeHeaders({ document = false, referer } = {}) {
-    if (document) {
-        return {
-            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Upgrade-Insecure-Requests': '1',
-        };
-    }
-
-    return {
-        Accept: 'application/json, text/plain, */*',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        ...(referer && { Referer: withoutUrlFragment(referer) }),
-    };
-}
 
 function isChallengePage(html) {
     const normalizedHtml = String(html || '').toLowerCase();
@@ -210,9 +255,6 @@ function isChallengePage(html) {
     );
 }
 
-function isRetryableStatus(status) {
-    return RETRYABLE_STATUSES.has(status) || status === 403;
-}
 
 function retryDelay(waitMs, attempt) {
     return Math.min(waitMs * 2 ** (attempt - 1), 8_000);
@@ -222,6 +264,27 @@ function getErrorMessage(error) {
     return String(error?.message || error || 'unknown error')
         .split(/\r?\n/, 1)[0]
         .slice(0, 240);
+}
+
+
+function toBrowserProxy(proxyUrl) {
+    const parsed = new URL(proxyUrl);
+    const proxy = {
+        server: `${parsed.protocol}//${parsed.host}`,
+    };
+
+    if (parsed.username || parsed.password) {
+        proxy.username = decodeURIComponent(parsed.username);
+        proxy.password = decodeURIComponent(parsed.password);
+    }
+
+    return proxy;
+}
+
+async function closeBrowserSession(session) {
+    if (session?.page) await session.page.close().catch(() => {});
+    if (session?.context) await session.context.close().catch(() => {});
+    if (session?.browser) await session.browser.close().catch(() => {});
 }
 
 async function waitForAnnuaireHtml(page) {
@@ -258,70 +321,29 @@ async function getProxyUrl(proxyConfiguration) {
     }
 }
 
-async function openImpitSession(startUrl, proxyConfiguration) {
-    let lastStatus;
-    let lastReason = 'unknown error';
-
-    for (let attempt = 1; attempt <= MAX_IMPIT_ATTEMPTS; attempt += 1) {
-        try {
-            const proxyUrl = await getProxyUrl(proxyConfiguration);
-            const client = new Impit({
-                browser: 'chrome',
-                ignoreTlsErrors: true,
-                ...(proxyUrl && { proxyUrl }),
-            });
-            const response = await client.fetch(startUrl, {
-                headers: getBrowserLikeHeaders({ document: true }),
-                signal: AbortSignal.timeout(IMPIT_TIMEOUT_MS),
-            });
-            const html = await response.text();
-
-            if (response.ok && html.includes('__NEXT_DATA__')) {
-                log.info('Annuaire bootstrap completed with Impit HTTP flow.');
-                return { kind: 'impit', client, html, referer: startUrl };
-            }
-
-            lastStatus = response.status;
-            lastReason = isChallengePage(html) ? 'DataDome challenge' : 'missing __NEXT_DATA__';
-            log.warning(
-                `Impit bootstrap unavailable (attempt ${attempt}/${MAX_IMPIT_ATTEMPTS}), ` +
-                    `status ${lastStatus || 'unknown'}, reason ${lastReason}; trying browser fallback.`,
-            );
-        } catch (error) {
-            lastReason = getErrorMessage(error);
-            log.warning(`Impit bootstrap error (attempt ${attempt}/${MAX_IMPIT_ATTEMPTS}): ${lastReason}.`);
-        }
-
-        if (attempt < MAX_IMPIT_ATTEMPTS) await sleep(retryDelay(500, attempt));
-    }
-
-    return { lastStatus, lastReason };
-}
 
 async function createBrowserSession(proxyUrl) {
-    const browser = await chromium.launch({
-        headless: true,
-        ...(proxyUrl && { proxy: { server: proxyUrl } }),
-        args: ['--disable-blink-features=AutomationControlled'],
-    });
+    const browserOptions = {
+        channel: 'chrome',
+        headless: false,
+        noViewport: true,
+        ...(proxyUrl && { proxy: toBrowserProxy(proxyUrl) }),
+    };
 
-    const browserVersion = browser.version().replace(/^HeadlessChrome\//, 'Chrome/');
-    const context = await browser.newContext({
-        userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ${browserVersion} Safari/537.36`,
-        locale: 'fr-FR',
-        timezoneId: 'Europe/Paris',
-        viewport: { width: 1365, height: 900 },
-        extraHTTPHeaders: {
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        },
-    });
-
-    await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-
-    const page = await context.newPage();
-    return { browser, context, page };
+    try {
+        const context = await chromium.launchPersistentContext('./storage/seloger-browser-profile', browserOptions);
+        const page = await context.newPage();
+        return { context, page };
+    } catch (error) {
+        log.warning(`Persistent Chrome launch failed; using Patchright headless fallback: ${getErrorMessage(error)}.`);
+        const browser = await chromium.launch({
+            headless: true,
+            ...(proxyUrl && { proxy: toBrowserProxy(proxyUrl) }),
+        });
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        return { browser, context, page };
+    }
 }
 
 async function openBrowserSession(startUrl, proxyConfiguration) {
@@ -331,7 +353,9 @@ async function openBrowserSession(startUrl, proxyConfiguration) {
     for (let attempt = 1; attempt <= MAX_BROWSER_SESSIONS; attempt += 1) {
         let session;
         try {
-            const proxyUrl = await getProxyUrl(proxyConfiguration);
+            const useDirectConnection = Boolean(proxyConfiguration) && attempt === MAX_BROWSER_SESSIONS;
+            const proxyUrl = useDirectConnection ? undefined : await getProxyUrl(proxyConfiguration);
+            if (useDirectConnection) log.info('Trying direct browser connection after proxy attempts failed.');
             session = await createBrowserSession(proxyUrl);
 
             let response;
@@ -347,7 +371,7 @@ async function openBrowserSession(startUrl, proxyConfiguration) {
             const html = await waitForAnnuaireHtml(session.page);
 
             if (html.includes('__NEXT_DATA__')) {
-                return { ...session, html };
+                return { ...session, kind: 'browser', html };
             }
 
             lastStatus = response?.status();
@@ -363,7 +387,7 @@ async function openBrowserSession(startUrl, proxyConfiguration) {
             );
         }
 
-        if (session) await session.browser.close().catch(() => {});
+        if (session) await closeBrowserSession(session);
         if (attempt < MAX_BROWSER_SESSIONS) await sleep(1500 * attempt);
     }
 
@@ -371,52 +395,7 @@ async function openBrowserSession(startUrl, proxyConfiguration) {
     return { kind: 'unavailable', lastStatus, lastReason };
 }
 
-async function openAnnuaireSession(startUrl, proxyConfiguration) {
-    const impitSession = await openImpitSession(startUrl, proxyConfiguration);
-    if (impitSession.kind === 'impit') return impitSession;
 
-    return openBrowserSession(startUrl, proxyConfiguration);
-}
-
-async function fetchApiJsonWithImpit(client, url, { retries = 4, waitMs = 500, label, referer }) {
-    let lastResult;
-
-    for (let attempt = 1; attempt <= retries; attempt += 1) {
-        try {
-            const response = await client.fetch(url, {
-                headers: getBrowserLikeHeaders({ referer }),
-                signal: AbortSignal.timeout(IMPIT_TIMEOUT_MS),
-            });
-            lastResult = { ok: response.ok, status: response.status, body: await response.text() };
-        } catch (error) {
-            lastResult = { ok: false, status: 0, error: getErrorMessage(error) };
-        }
-
-        let data;
-        try {
-            data = JSON.parse(lastResult?.body || '');
-        } catch {
-            data = null;
-        }
-
-        if (lastResult?.ok && isRecord(data) && Array.isArray(getCaseInsensitiveField(data, 'intermediaries'))) {
-            return { ...lastResult, data };
-        }
-
-        const reason = lastResult?.status ? `status ${lastResult.status}` : lastResult?.error || 'invalid JSON';
-        log.warning(`${label} failed (attempt ${attempt}/${retries}), ${reason}.`);
-        if (
-            lastResult?.status === 403 ||
-            isChallengePage(lastResult?.body) ||
-            (lastResult?.status > 0 && !isRetryableStatus(lastResult.status))
-        ) {
-            return { ...lastResult, data: null };
-        }
-        if (attempt < retries) await sleep(retryDelay(waitMs, attempt));
-    }
-
-    return { ...lastResult, data: null };
-}
 
 async function fetchApiJsonInBrowser(page, url, { retries = 4, waitMs = 1500, label }) {
     let lastResult;
@@ -458,7 +437,7 @@ async function fetchApiJsonInBrowser(page, url, { retries = 4, waitMs = 1500, la
         log.warning(`${label} failed (attempt ${attempt}/${retries}), ${reason}.`);
 
         if (attempt < retries) {
-            if (isRetryableStatus(lastResult?.status)) {
+            if (lastResult?.status === 403 || isChallengePage(lastResult?.body)) {
                 await page.reload({ waitUntil: 'commit', timeout: BROWSER_NAVIGATION_TIMEOUT_MS }).catch(() => {});
                 await waitForAnnuaireHtml(page);
             }
@@ -536,10 +515,21 @@ const {
     start_url,
     results_wanted: resultsWantedRaw = 20,
     count_per_page: countPerPageRaw,
+    location: locationInput,
+    filters: filtersInput,
     proxyConfiguration: proxyConfig,
 } = input;
 
-const startUrlFromInput = startUrl || start_url;
+const inputLocation = normalizeLocation(locationInput);
+const locationUrl = inputLocation.localityUrlPath
+    ? toAbsoluteSelogerUrl(inputLocation.localityUrlPath)
+    : undefined;
+const startUrlFromInput =
+    startUrl ||
+    start_url ||
+    (inputLocation.localityUrlPath || (inputLocation.geoApiPlaceId && inputLocation.geoApiPlaceType)
+        ? locationUrl || 'https://www.seloger.com/annuaire/'
+        : undefined);
 
 const resultsWanted = toPositiveInteger(resultsWantedRaw, 20);
 const countPerPage = toPositiveInteger(countPerPageRaw, DEFAULT_COUNT_PER_PAGE);
@@ -555,15 +545,19 @@ try {
     if (!startUrlFromInput) throw new Error('startUrl is required.');
 
     const parsedUrl = parseStartUrl(startUrlFromInput);
+    const filters = normalizeFilters(filtersInput, parsedUrl);
+    const parsedSearchUrl = { ...parsedUrl, ...filters };
+    const explicitAnnuaireContext = createExplicitAnnuaireContext(parsedUrl, locationInput, filters);
     log.info(`Run limits: resultsWanted=${resultsWanted}, autoPages=${targetPages}, countPerPage=${countPerPage}.`);
+    log.info(`Search filters: ${JSON.stringify(filters)}.`);
 
     const proxyOptions = proxyConfig || (isCloudRun ? DEFAULT_PROXY_CONFIGURATION : undefined);
     proxyConfiguration = proxyOptions ? await Actor.createProxyConfiguration(proxyOptions) : undefined;
-    browserSession = await openAnnuaireSession(parsedUrl.normalizedUrl, proxyConfiguration);
+    browserSession = await openBrowserSession(parsedUrl.normalizedUrl, proxyConfiguration);
     if (!browserSession?.html) {
         log.warning('Annuaire bootstrap remained unavailable after bounded retries; no records were collected.');
     } else {
-        let annuaireContext = extractAnnuaireContext(browserSession.html, parsedUrl);
+        const annuaireContext = explicitAnnuaireContext || extractAnnuaireContext(browserSession.html, parsedSearchUrl);
         if (!annuaireContext.geoApiPlaceId || !annuaireContext.geoApiPlaceType) {
             log.warning(
                 'Could not resolve geoApiPlaceId or geoApiPlaceType from annuaire page; no records were collected.',
@@ -572,49 +566,36 @@ try {
             log.info(`Annuaire context: ${JSON.stringify(annuaireContext)}`);
 
             for (let pageNumber = 1; pageNumber <= targetPages && totalSaved < resultsWanted; pageNumber += 1) {
-                const apiUrl = buildApiUrl({
+                const apiParams = {
                     geoApiPlaceId: annuaireContext.geoApiPlaceId,
                     geoApiPlaceType: annuaireContext.geoApiPlaceType,
                     pageNumber,
                     countPerPage,
                     projectType: annuaireContext.projectType,
                     intermediaryTypes: annuaireContext.intermediaryTypes,
-                });
+                };
+                let apiUrl = buildApiUrl(apiParams);
+                const bracketedApiUrl = buildApiUrl(apiParams, { bracketArrayKeys: true });
 
                 log.info(`Fetching page ${pageNumber}`);
 
-                let searchResult =
-                    browserSession.kind === 'impit'
-                        ? await fetchApiJsonWithImpit(browserSession.client, apiUrl, {
-                              retries: 4,
-                              waitMs: 500,
-                              label: `Intermediaries page ${pageNumber}`,
-                              referer: browserSession.referer,
-                          })
-                        : await fetchApiJsonInBrowser(browserSession.page, apiUrl, {
-                              retries: 4,
-                              waitMs: 1000,
-                              label: `Intermediaries page ${pageNumber}`,
-                          });
+                let searchResult = await fetchApiJsonInBrowser(browserSession.page, apiUrl, {
+                    retries: 4,
+                    waitMs: 1000,
+                    label: `Intermediaries page ${pageNumber}`,
+                });
 
-                if (!searchResult?.ok && browserSession.kind === 'impit') {
-                    log.warning('Impit API flow was blocked; switching to the browser session for this run.');
-                    browserSession = await openBrowserSession(parsedUrl.normalizedUrl, proxyConfiguration);
-                    if (!browserSession?.html) {
-                        log.warning(
-                            `Browser API fallback was unavailable on page ${pageNumber}; stopping after saved results.`,
-                        );
-                        break;
-                    }
-                    annuaireContext = extractAnnuaireContext(browserSession.html, parsedUrl);
+                if (!searchResult?.data && bracketedApiUrl !== apiUrl) {
+                    log.warning('Retrying the intermediary API with bracketed filter parameters.');
+                    apiUrl = bracketedApiUrl;
                     searchResult = await fetchApiJsonInBrowser(browserSession.page, apiUrl, {
-                        retries: 4,
+                        retries: 1,
                         waitMs: 1000,
-                        label: `Intermediaries page ${pageNumber}`,
+                        label: `Intermediaries bracketed page ${pageNumber}`,
                     });
                 }
 
-                if (!searchResult?.ok) {
+                if (!searchResult?.data) {
                     log.warning(`Intermediaries API unavailable on page ${pageNumber}; stopping after saved results.`);
                     break;
                 }
@@ -710,7 +691,7 @@ try {
     runError = error;
     log.error(`Run failed: ${error.stack || error.message}`);
 } finally {
-    if (browserSession?.browser) await browserSession.browser.close().catch(() => {});
+    await closeBrowserSession(browserSession);
     log.info(`Finished. Saved ${totalSaved} intermediaries.`);
     if (runError) {
         await Actor.fail(runError.message);
