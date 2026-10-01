@@ -7,7 +7,7 @@ Extract real estate agency, independent consultant, developer, and property admi
 - **Structured agent directory** - Collect intermediary profiles with names, types, ratings, listing counts, and location data from SeLoger annuaire search results. No manual copying from directory pages.
 - **Automation-ready dataset** - Export results to JSON, CSV, Excel, or XML. Connect datasets to BI tools, CRM systems, or data pipelines.
 - **Search-filter control** - Target specific intermediary types (agencies, independent consultants, developers, property administrators) and project types (buying, renting) through URL hash filters available on SeLoger.
-- **Production reliability** - Pagination across multiple result pages is automatic. Higher page sizes reduce request count. Residential proxy support is available for consistent large-scale runs.
+- **Bounded recovery** - The Actor establishes a legitimate browser session, then reuses it for the directory requests. Temporary connection failures are retried, and denied or malformed responses are reported as run failures instead of empty successful datasets.
 
 ## What data can you extract from SeLoger?
 
@@ -41,10 +41,10 @@ Extract real estate agency, independent consultant, developer, and property admi
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `startUrl` | String | No | Paris annuaire URL | SeLoger annuaire URL with location and filters. The hash fragment carries `intermediaryTypes` and `projectType` parameters. |
+| `startUrl` | String | Yes | - | SeLoger annuaire URL with location and filters. The Paris URL shown in the input form is an example, not a runtime default. |
 | `results_wanted` | Integer | No | `20` | Maximum number of intermediary profiles to collect. Minimum 1. |
-| `count_per_page` | Integer | No | `100` | Records requested per API call. Higher values reduce pagination requests and may reduce blocking risk. |
-| `proxyConfiguration` | Object | No | Apify residential proxy | Proxy settings for production runs. Residential proxy is recommended for consistent results at scale. |
+| `count_per_page` | Integer | No | `100` | Number of records requested on each results page. Kept constant across pages so pagination stays aligned. |
+| `proxyConfiguration` | Object | No | Apify residential proxy | Proxy settings for runs with authorized source access. A residential proxy does not guarantee access. |
 
 ## Output Data
 
@@ -70,21 +70,21 @@ Extract real estate agency, independent consultant, developer, and property admi
 | `pro_selection_count` | Integer | Number of professional selection listings linked to the intermediary |
 | `rank_on_page` | Integer | Position within the current page results (1-indexed) |
 | `rank_global` | Integer | Global rank across all pages |
-| `page_result_count` | Integer | Number of intermediaries on this API page |
-| `page` | Integer | Annuaire API page number |
-| `count_per_page` | Integer | Count per page value used in API calls |
+| `page_result_count` | Integer | Number of intermediaries returned on this results page |
+| `page` | Integer | Annuaire results page number |
+| `count_per_page` | Integer | Result count requested for this page |
 | `total_results` | Integer | Total intermediaries matching the query |
-| `locality_url_path` | String | Locality URL path from API response |
-| `locality_place_id` | Integer | Locality place ID from API response |
+| `locality_url_path` | String | Locality URL path from the directory result |
+| `locality_place_id` | Integer | Locality place ID from the directory result |
 | `locality_place_type` | String | Locality place type (city, district) |
 | `locality_name` | String | Locality name (e.g., Paris) |
 | `locality_postal_code` | String | Locality postal code (e.g., 75000) |
-| `breadcrumb_count` | Integer | Number of breadcrumb items in the API response |
+| `breadcrumb_count` | Integer | Number of breadcrumb items returned with the results |
 | `first_breadcrumb_label` | String | First breadcrumb label (e.g., Immobilier) |
-| `seo_blocks_count` | Integer | Number of SEO blocks in the API response |
-| `redirect_url` | String | Redirect URL if the API response includes one |
-| `geo_api_place_id` | String | Geographic place ID used in the API call |
-| `geo_api_place_type` | String | Geographic place type used in the API call |
+| `seo_blocks_count` | Integer | Number of related local content blocks returned with the results |
+| `redirect_url` | String | Redirect URL included in the directory response |
+| `geo_api_place_id` | String | Geographic place ID used for the selected locality |
+| `geo_api_place_type` | String | Geographic place type used for the selected locality |
 | `project_type` | String | Project type used in the annuaire query (e.g., "1" for buying) |
 | `intermediary_types` | Array | Intermediary type filters used in the annuaire query |
 | `search_url` | String | Original annuaire search URL |
@@ -176,8 +176,8 @@ Use residential proxy routing for consistent results during high-volume or frequ
 - Use a fully filtered annuaire URL from SeLoger to keep runs repeatable and aligned with your target market. The hash fragment in the URL controls intermediary types and project type.
 - Start with a small `results_wanted` value (20) for validation, then scale up once you confirm data quality.
 - Pagination is automatic. The Actor calculates the required number of pages from `results_wanted` and `count_per_page`.
-- A higher `count_per_page` value (100 or more) reduces the total number of requests and can help avoid rate limits.
-- Use residential proxies for production runs, especially at high frequency or large volume.
+- A higher `count_per_page` can reduce the number of pages for larger result limits. The Actor stops once `results_wanted` profiles have been collected.
+- Use proxy settings only where you are permitted to access the selected SeLoger directory page. A proxy cannot guarantee that SeLoger will allow a run.
 
 ## Integrations
 
@@ -208,6 +208,10 @@ Use hash parameters in the SeLoger annuaire URL. The `intermediaryTypes` paramet
 ### Can I schedule recurring runs?
 
 Yes. Schedule the Actor in Apify Console to run hourly, daily, or weekly. Recurring runs let you track intermediary presence and activity changes over time.
+
+### Why did a run stop with an access error?
+
+SeLoger can deny an automated session for a page or connection. The Actor reports that denial as a failed run instead of presenting an empty dataset as a successful search. Check the annuaire URL and proxy settings; for recurring denials, request supported access from SeLoger or AVIV.
 
 ### Can I export the data to CSV or Excel?
 

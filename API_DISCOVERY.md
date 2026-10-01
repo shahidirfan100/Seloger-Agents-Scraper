@@ -1,65 +1,86 @@
-## Selected API
-- Endpoint: `https://www.seloger.com/slr_idb/api/v4/intermediaries`
-- Method: `GET`
-- Auth: No account authentication; a same-origin browser session is currently required to pass DataDome
-- Pagination: `page` and `countPerPage` query params
-- Core filters: `geoApiPlaceId`, `geoApiPlaceType`, repeated unbracketed `intermediaryTypes` keys, and `projectType`
-- Verified request format: `intermediaryTypes=1&intermediaryTypes=2&intermediaryTypes=3&intermediaryTypes=5`
-- Compatibility fallback: bracketed `intermediaryTypes[]` is retained as a one-attempt fallback, but returned `500` during current testing
-- Runtime pagination strategy: pages are auto-calculated from `results_wanted` using configurable `countPerPage` with a default of `100`
-- Location modes: callers can provide `location.geoApiPlaceId` and `location.geoApiPlaceType`; URL-only runs resolve these from annuaire `__NEXT_DATA__`
-- Filter precedence: `filters.projectType` and `filters.intermediaryTypes` override equivalent URL hash values
+# SeLoger Agent Directory Source Review
 
-## Why This API Was Selected
-- Returns structured intermediary records for annuaire pages
-- Supports pagination and location/type filters
-- Includes richer fields than basic HTML cards (`intermediaryId`, `idRcu`, rating, listing counts, profile URL)
-- Stable response shape observed across requests; on 2026-09-09 the repeated unbracketed filter format returned valid JSON while the bracketed format returned SeLoger's `500` error page
-- Verified page sizes of `8`, `10`, `20`, `50`, `100`, and `200`; each returned the requested number of intermediary records
-- Rejected weaker candidates: listing-derived agency data (not a complete directory), the spotlight endpoint (one promoted agency only), DOM parsing (fewer fields), and unconfirmed mobile routes
+Research date: 2026-09-23
+Updated: 2026-09-30 (verified working flow)
 
-## Scoring (≥50 required)
-| Factor | Points |
-|---|---|
-| Returns JSON directly | +30 |
-| Has >15 unique fields | +25 |
-| No auth required | +20 |
-| Has pagination support | +15 |
-| Matches or extends current fields | +10 |
-| **Total** | **100** |
+## Verified working flow (2026-09-30)
 
-## Available Fields (List API)
-- Identity: `intermediary_id`, `seloger_id`, `id_rcu`, `name`, `origin`
-- Classification: `intermediary_type`, `intermediary_type_label`
-- Profile: `profile_url`, `description`, `logo_src`, `logo_alt`
-- Quality signals: `rating_value`, `rating_reviews_count`
-- Activity counts: `sell_count`, `rent_count`, `sold_count`, `pro_selection_count`
-- List metadata: `locality_*`, `breadcrumb_count`, `first_breadcrumb_label`, `seo_blocks_count`, `redirect_url`
-- Ranking metadata: `rank_on_page`, `rank_global`, `page_result_count`
-- Context: `project_type`, `intermediary_types`, `geo_api_place_id`, `geo_api_place_type`, `page`, `total_results`, `scraped_at`
+A fresh Apify cloud run now collects directory records end to end:
 
-## Output Hygiene
-- Null and empty values are removed recursively before pushing records to the dataset
-- Empty arrays and empty objects are omitted to keep output clean and export-friendly
-- Duplicate `intermediary_id` values are skipped across paginated pages
-- Optional fields such as `description` and `logo_src` are omitted when the source returns null
+- Paris, all types, 20 requested -> 20 saved, run `SUCCEEDED`.
+- Paris, all types, 120 requested at 50/page -> 120 unique saved across 3 pages, continuous ranks.
+- Lyon, types 1 and 2, 15 requested -> 15 saved, `total_results` 541, run `SUCCEEDED`.
 
-## Candidate Matrix
-| Candidate | Client/profile | Status and marker | Fields | Pagination | Decision |
-|---|---|---|---:|---|---|
-| `/slr_idb/api/v4/intermediaries` with repeated keys | Same-origin Chrome session | `200` JSON, `intermediaries` present | More than 15 | `page`, `countPerPage` | Selected |
-| `/slr_idb/api/v4/intermediaries` with bracketed keys | Same-origin Chrome session | `500` HTML, `Oups - Seloger` | 0 | Unusable | One-attempt compatibility fallback |
-| Direct annuaire endpoint request | Desktop, iOS Safari, Android API profiles | `403` DataDome challenge | 0 | Unknown | Rejected without browser session |
-| Annuaire `__NEXT_DATA__` | Same-origin Chrome session | `200`, eight embedded records plus location metadata | More than 15 | Initial page only | Bootstrap source |
-| Agency spotlight BFF | Direct JSON request | `200`, one agency | 29 nested fields | No verified pagination | Rejected as incomplete |
-| Property search plus classified details | Same-origin session | `200`, agency data attached to listings | Rich but listing-dependent | Listing pages | Rejected as incomplete directory |
-| URLScan historical results | Public scan search | No current alternate directory endpoint | 0 | Unknown | Rejected |
+Cloud runs execute under `xvfb-run` (the base image entrypoint wraps the command), so Google Chrome runs in headed mode inside the container. Headless Chromium/Chrome is detected by DataDome and returns a challenge; headed Chrome from the image is not detected in these runs.
 
-## Runtime Resilience (QA Hardening)
-- Actor treats transient proxy/network failures, including `407`, `594`, and `ERR_TUNNEL_CONNECTION_FAILED`, as recoverable.
-- HTTP bootstrap tries rotating proxy sessions and then a direct connection before browser fallback.
-- Explicit API locations avoid the protected annuaire bootstrap entirely.
-- Browser fallback uses Patchright with real Chrome, persistent context, non-headless mode, and no fixed viewport; a headless Patchright fallback is used only when Chrome cannot start.
-- Challenge-page detection and bounded retries remain active before extraction begins.
-- Only `403` or a detected challenge triggers a page reload. Ordinary `5xx` responses retry without reloading, avoiding unnecessary DataDome exposure.
-- The verified repeated-key parameter format is attempted first, eliminating four deterministic `500` retries from the previous flow.
+## Why the previous version failed
+
+The old `src/main.js` never reached extraction, even when the browser itself could load the site:
+
+1. It waited for `__NEXT_DATA__` in the annuaire HTML. The current SeLoger annuaire is a client-rendered Next.js app served from `/slr_idw/`; the delivered HTML does not contain `__NEXT_DATA__`, so the success condition never matched.
+2. It treated any DataDome challenge HTML as a permanent stop and returned before calling the API. In practice the `datadome` cookie is issued within about a second and the JSON API then answers `200` even while the visible page still shows the interstitial.
+3. It resolved `geoApiPlaceId` / `geoApiPlaceType` from the page. The page does not expose them, so extraction could not be located.
+4. It capped `countPerPage` to the remaining `results_wanted`. The API computes its offset as `(page - 1) * countPerPage`, so changing the page size on the last page shifted the offset and returned already-seen rows.
+
+## Selected source
+
+- Endpoint: `GET https://www.seloger.com/slr_idb/api/v4/intermediaries`
+- Required context: the request must run inside a real headed browser page context on `www.seloger.com` (`fetch(..., { credentials: 'include' })`). The `datadome` cookie set by the live page is required.
+- Query parameters:
+  - `urlPath` - annuaire path, for example `/annuaire/paris-75000/`. This alone is sufficient to locate the directory. `geoApiPlaceId` and `geoApiPlaceType` are optional.
+  - `intermediaryTypes` - repeated key, values 1, 2, 3, 5.
+  - `projectType` - `1` (buy) or `2` (rent).
+  - `countPerPage` - kept constant across pages.
+  - `page` - 1-based page number.
+- Header: `x-business-unit: 1` (sent by the site; not strictly required, kept for parity).
+- Pagination: `page` with a fixed `countPerPage`; stop when a page returns fewer rows than requested.
+- Response fields used: `intermediaries[]` (`intermediaryId`, `id`, `idRcu`, `origin`, `logo`, `intermediaryType`, `name`, `rating`, `properties`, `url`, `description`), `intermediariesCount`, `locality.place`, `locality.urlPath`, `breadCrumb`, `seoBlocks`, `redirectUrl`.
+
+The actor preserves its existing output contract. No dataset field names or meanings changed.
+
+## Evidence matrix
+
+| Candidate | Result | Decision |
+|---|---|---|
+| Direct HTTP (`fetch`) to the annuaire page or the API | HTTP 403, DataDome challenge, no data | Rejected |
+| Impit with browser emulation (`chrome`, `chrome131`, `chrome136`, `firefox`, `ios18`, `okhttp4`) to the page or API | HTTP 403, DataDome challenge | Rejected for direct use |
+| Patchright headless (bundled Chromium and `channel: chrome`) | `datadome` cookie issued, but the API returns HTTP 403 with a captcha URL | Rejected |
+| Patchright headed `channel: chrome` (local display; Xvfb on Apify) | `datadome` cookie issued; API in page context returns `200` JSON immediately | Selected |
+| Reusing the browser cookie from Node `fetch` or Impit | Not reliable in testing | Not used; requests stay in the browser context |
+| Static Next.js chunks under `/slr_idw/_next/static/...` | Publicly fetchable, not needed at runtime | Used only to confirm the API contract |
+
+Notes:
+
+- Impit-based and plain-HTTP requests connect from outside the browser and are rejected because the server requires the browser-issued `datadome` cookie bound to the browser session.
+- Keeping the API call inside the same page context keeps the cookie, TLS fingerprint, and proxy IP aligned, which is required for the request to be accepted.
+- Browser requests go through the configured proxy because the whole context uses it. The actor defaults to Apify residential proxy on the platform.
+
+## Supported/legal access
+
+SeLoger's terms prohibit automated extraction, and its robots file disallows `/slr_idb/api/*`. The technical flow above is documented for maintainers and for runs the operator is permitted to perform. SeLoger may still deny a session at any time. The supported, durable route for guaranteed production access remains the AVIV/SeLoger partner path:
+
+- AVIV France onboarding: https://www.developers.aviv-group.com/guides/how-to-onboard-on-aviv-apis/onboarding-path-french-apis-seloger-services
+- AVIV support: https://www.developers.aviv-group.com/support
+- SeLoger terms: https://www.seloger.com/Conditions_Generales_d_Utilisation.html
+
+## Existing actor contract
+
+- Search input: a SeLoger annuaire `startUrl` (legacy `start_url` alias still read).
+- Optional input: location and professional/project filters.
+- Result controls: `results_wanted` and `count_per_page`.
+- Output: the existing intermediary mapping in `src/main.js`.
+- Default filter requests types `1`, `2`, `3`, and `5`.
+
+## Reliability changes in `src/main.js`
+
+- The browser always runs headed (`channel: chrome`); on Apify the base image runs it under Xvfb.
+- Bootstrap navigates to the annuaire URL and waits for the `datadome` cookie, not for `__NEXT_DATA__`. A DataDome interstitial is no longer treated as a hard stop.
+- The API is called from the page context using `urlPath`, removing the dependency on page-embedded place IDs.
+- A DataDome challenge, HTTP 403/407/429/5xx, or network error is retried with bounded backoff and a session refresh; the delay honors `Retry-After`.
+- `countPerPage` stays constant across pages so pagination offsets remain aligned.
+- Bootstrap and API failures are reported as actor failures when no records were saved; successful partial datasets remain available if a later page fails.
+
+## Evidence limits
+
+- Verification used Apify residential proxy defaults on Linux/Xvfb and a local headed Chrome on Windows. Other proxy types, concurrent data-center access, or heavy scheduling may still be denied.
+- This endpoint is undocumented and disallowed in SeLoger's robots file. Stable, supported production access requires SeLoger/AVIV partner access.

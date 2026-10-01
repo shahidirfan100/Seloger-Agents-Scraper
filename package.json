@@ -5,7 +5,6 @@
     "type": "module",
     "dependencies": {
         "apify": "^3.7.2",
-        "cheerio": "^1.2.0",
         "crawlee": "^3.18.1",
         "patchright": "^1.60.0"
     },
